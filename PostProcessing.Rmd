@@ -1,0 +1,139 @@
+---
+title: "PostProcessing"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(ggplot2)
+library(tidybayes)
+library(rstan)
+library(devtools)
+library(StanHeaders)
+library(readxl)
+library(data.table)
+library(tidyr)
+library(boot)
+library(modelr)
+library(tidyverse)
+library(boot)
+library(brms)
+library(modelr)
+library(tidybayes)
+library(scales)
+library(magrittr)
+library(ggforce)
+
+```
+
+## R Markdown
+
+
+The data itself, and some necessary mutations:
+
+```{r data import and mutate}
+
+exp_data <- read.csv("~/experiments/R_ResultsfromFirebase/results/20190420 pilot_2 data_trials.csv")
+exp_participants <- read.csv("~/experiments/R_ResultsfromFirebase/results/20190420 pilot_2 data_participants.csv")
+View(exp_data)
+exp_data <- exp_data %>%
+  filter(expType == "main")
+
+exp_data <- exp_data %>%
+  select(-data6, -data7,-data8,-data9,-data10,-questionListIndex, -additional_comment,-experimentName.y, -experimentName.x) %>%
+  mutate(sessionMinutes = (sessionEndTime-sessionStartTime)/1000/60,
+         trialSeconds = (trialEndTime - trialStartTime)/1000,
+         selectedPercentage = selectedPercentage / 100,
+         workerId = as.numeric(workerId))
+
+restrict = function(x) ifelse(x == 0, 0.001, ifelse(x == 1, .999, x))
+
+exp_data %<>%
+  mutate(restricted_estimate = restrict(selectedPercentage))
+
+exp_data <- exp_data %>%
+  mutate(logit_estimated = logit(restricted_estimate),
+         logit_real = logit(realPercentage))
+
+```
+
+Some very simple plots
+```{r simple plots}
+exp_data %>%
+  ggplot(aes(x = selec, y = logit_estimated)) +
+  geom_point(data = exp_data) 
+
+
+```
+
+
+Working models into it (this works, more or less, but is broadly uninteresting
+
+
+```{r brms output}
+simpleMLM = brm(logit_estimated ~ logit_real + (logit_real | workerId), exp_data, family = student())
+
+pdf("~/MSThesis/simpleAbsError.pdf")
+for(i in 1:10){
+
+print(exp_data %>%
+  data_grid(logit_real = seq_range(logit_real, n = 101), workerId) %>%
+  add_predicted_draws(simpleMLM) %>%
+  ggplot(aes(x = logit_real, y = abs(logit_real-logit_estimated))) +
+  stat_lineribbon(aes(y = .prediction), .width = c(.95, .8, .5), color = "#08519C") +
+  geom_point(data = exp_data, size = 2) +
+  scale_fill_brewer() +
+  facet_wrap_paginate(workerId, ncol = 3, nrow = 3, page = i))
+}
+
+dev.off()
+```
+
+
+A more complex model -- also works
+```{r brms output}
+complexMLM = brm(logit_estimated ~ logit_real + (logit_real | workerId|vis), exp_data, family = student())
+
+pdf("~/MSThesis/complexAbsError.pdf")
+for(i in 1:15){
+
+print(exp_data %>%
+  data_grid(logit_real = seq_range(logit_real, n = 101), workerId) %>%
+  add_predicted_draws(simpleMLM) %>%
+  ggplot(aes(x = logit_real, y = abs(logit_real-logit_estimated))) +
+  stat_lineribbon(aes(y = .prediction), .width = c(.95, .8, .5), color = "#08519C") +
+  geom_point(data = exp_data, size = 2) +
+  scale_fill_brewer() +
+  facet_wrap_paginate(.~workerId, ncol = 3, nrow = 2, page = i))
+}
+dev.off()
+```
+
+This doesn't work at all and probably never should.
+
+
+```{r nonlinear brms, eval = FALSE}
+priors_nonlin <- prior(normal(1,2), nlpar = "pow2") + prior(normal(0.5, 0.1), nlpar = "pow1") + prior(normal(0.05, 0.05),nlpar="pow0")
+fit_nonlin <- brm(bf(error_absolute ~ (pow0 + pow1 * realPercentage + pow2 * realPercentage^2),  pow0 ~ 1|workerId, pow1 ~ 1|workerId, pow2 ~ 1|workerId, nl = TRUE), data = exp_data, prior = priors_nonlin)
+
+saver = exp_data %>%
+  data_grid(error_absolute = seq_range(realPercentage, n = 101), workerId) %>%
+  add_predicted_draws(fit_nonlin) %>%
+  ggplot(aes(x = realPercentage, y = error_absolute)) +
+  stat_lineribbon(aes(y = .prediction), .width = c(.95, .8, .5), color = "#08519C") +
+  geom_point(data = exp_data, size = 2) +
+  scale_fill_brewer() +
+  facet_wrap(~workerId)
+```
+
+
+In order to derive priors for Stan, we use the error results from Heer and Bostock's replication from Cleveland-McGill for the
+mean and assume a normal distribution.
+
+```{r Heer-Bostock priors}
+out_label = c("Bar", "Pie", "Bubble")
+out_mean = c(.014, .022, .027)
+output = rbind(out_label,out_mean)
+unscaled_absolute_error = out_mean^2
+```
