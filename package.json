@@ -9,7 +9,7 @@
     "d3.promise": "^2.0.0",
     "firebase": "^5.5.8",
     "lodash": "^4.17.11",
-    "mathjs": "^5.8.0",
+    "mathjs": "^7.5.1",
     "query-string": "^6.9.0",
     "react": "^16.6.3",
     "react-beautiful-dnd": "^11.0.5",
